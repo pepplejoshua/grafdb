@@ -1,5 +1,8 @@
 # Edge -> (in, out which are both scalar IDs referring to Nodes)
 # Node -> (in, out which are list of IDs referring nodes both pointed to and being referred to from)
+from query import Query
+
+
 def error(msg):
     print(msg)
     return False
@@ -57,3 +60,8 @@ class Graph:
         nodeOut = edge._out
         nodeIn._in.push(edge) # update the "in" node's in edges array
         nodeOut._out.push(edge) # update the "out" node's out edges array
+
+    def v(g, *args):
+        q = Query(g)
+        q.add("vertex", args)
+        return q
