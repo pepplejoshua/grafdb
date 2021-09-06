@@ -14,11 +14,12 @@ class Entity:
         return node
 
 class Connection:
-    def __init__(f, A: Entity, B: Entity, ctype: str, isTwoWay: bool) -> None:
+    def __init__(f, A: Entity, B: Entity, ctype: str, isTwoWay: bool, props: dict=None) -> None:
         f.A = A
         f.B = B
         f.connection = ctype
         f.isTwoway = isTwoWay
+        f.props = props
 
     def toEdges(f) -> list[dict]:
         nodeA = f.A.toNode()
@@ -29,13 +30,18 @@ class Connection:
         # handle connection from A to B
         edgeAtoB["from"] = nodeA["id"]
         edgeAtoB["to"] = nodeB["id"]
-
+        if f.props:
+            edgeAtoB.update(f.props)
+            
         if f.isTwoway:
             edgeBtoA = {"label": f.connection}
 
             # handle connection from B to A
             edgeBtoA["from"] = nodeB["id"]
             edgeBtoA["to"] = nodeA["id"]
+
+            if f.props:
+                edgeBtoA.update(f.props)
 
             return [edgeAtoB, edgeBtoA]
         return [edgeAtoB]

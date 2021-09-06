@@ -1,6 +1,8 @@
 from inspect import isfunction
 from model import Connection, Entity
 from rich import print
+import json
+from functools import reduce
 
 PULL = "pull"
 def error(msg):
@@ -64,7 +66,7 @@ class Graph:
         
         if isinstance(args[0], dict):
             return g.searchNodesByProperties(args[0])
-        elif isinstance(args[0], str):
+        else:
             return g.findNodesByIds(args)
     
     def findNodeById(g, id):
@@ -153,6 +155,7 @@ class Query:
         return q
 
     def run(q):
+        q.program = Graf["transform"](q.program) # transform program before running
         MAX = len(q.program) - 1 # last step in program
         maybe_gremlin = False # gremlin dict, signal string or False
         q_results = [] # results for particular q run
@@ -162,15 +165,12 @@ class Query:
 
         
         while done_s < MAX:
-            # print(q.program)
-            # print(prog_c)
             query_s = q.state
             c_step = q.program[prog_c]
             query_s[prog_c] = query_s[prog_c] if query_s[prog_c] else {}
             state = query_s[prog_c] # previous line makes sure state is a dict
             pipetypeFn = Graf["getPipetype"](c_step[0])
             maybe_gremlin = pipetypeFn(q.graph, c_step[1], maybe_gremlin, state)
-            # print(maybe_gremlin)
             if maybe_gremlin == PULL:
                 maybe_gremlin = False
                 if prog_c-1 > done_s:
@@ -192,6 +192,7 @@ class Query:
 
         getGremlinResult = lambda grem: grem["result"] if grem.get("result", False) else grem["vertex"]
         q_results = list(map(getGremlinResult, q_results))
+        q_results.reverse()
         return q_results
 
 
@@ -245,6 +246,7 @@ def simpleTraversal(direction: str):
         if not gremlin and (not state.get("edges", None) or not len(state["edges"])): # query init
             return PULL
 
+        # routes directly to edge containing the vertices
         if (not state.get("edges", None) or not len(state["edges"])):
             state["gremlin"] = gremlin
             method = graph.findFromEdges if direction == "from" else graph.findToEdges # choose graph traversal method
@@ -256,6 +258,7 @@ def simpleTraversal(direction: str):
         if not len(state["edges"]): # no more edges to traverse
             return PULL
 
+        # handles routing to the vertex in the edge 
         if direction == "from":
             vertex = state["edges"].pop()["to"]
         else:
@@ -265,9 +268,7 @@ def simpleTraversal(direction: str):
 
 Graf = {}
 Graf["Graph"] = Graph
-Graf["G"] = {}
 Graf["Query"] = Query
-Graf["Q"] = {}
 Graf["error"] = error
 Graf["Pipetypes"] = {}
 Graf["addPipetype"] = addPipetype
@@ -295,7 +296,7 @@ def addVertexPipetype(graph: Graph, args, gremlin: dict , state: dict):
         return Graf["makeGremlin"](vertex, {})
 
 def addPropertyPipetype(graph: Graph, args, gremlin: dict, state: dict):
-    if not gremlin:
+    if not gremlin or not isinstance(gremlin, dict):
         return PULL
 
     if not len(args):
@@ -308,7 +309,13 @@ def addPropertyPipetype(graph: Graph, args, gremlin: dict, state: dict):
         if not val:
             continue
         props[key] = val
-    gremlin["result"] = props
+    
+    if len(props.keys()) == 1:
+        pks = list(props.keys())
+        k = pks[0]
+        gremlin["result"] = props[k]
+    else:
+        gremlin["result"] = props
     # gremlin["result"] = gremlin["vertex"].get(args[0], None)
     return False if not gremlin["result"] else gremlin # return false if we can't find matching props on Nodes
 
@@ -331,10 +338,14 @@ def addFilterPipetype(graph: Graph, args, gremlin: dict, state: dict):
         return PULL
 
     if isinstance(args[0], dict):
-        return Graf["objectFilter"](gremlin["vertex"], args[0])
+        res = Graf["objectFilter"](gremlin["vertex"], args[0])
+        if res:
+            return gremlin
+        else:
+            return PULL
     elif callable(args[0]) or isfunction(args[0]):
         fn = args[0]
-        if not fn(gremlin["vertex"], gremlin): # if the gremlin fails filter function, pull
+        if not fn(gremlin["vertex"]): # if the gremlin fails filter function, pull
             return PULL
         return gremlin
     else:
@@ -344,16 +355,11 @@ def addFilterPipetype(graph: Graph, args, gremlin: dict, state: dict):
 # fix this
 def addTakePipetype(graph: Graph, args, gremlin: dict, state: dict):
     state["taken"] = state["taken"] if state.get("taken", False) else 0
-    
-    if not len(args):
-        error("take pipe missing argument(s)")
-        return PULL
-
-    if state["taken"] == args[0]:
+    if len(args) and state["taken"] == args[0]:
         state["taken"] = 0 # this allows us to reuse the query later
         return "done" # closes all previous pipes
-
-    if not gremlin:
+        
+    if not gremlin or not isinstance(gremlin, dict):
         return PULL
 
     state["taken"] += 1
@@ -424,80 +430,41 @@ Graf["addPipetype"]("merge", addMergePipetype)
 Graf["addPipetype"]("except", addExceptPipetype)
 Graf["addPipetype"]("back", addBackPipetype)
 
-me = Entity("joshua", {"age": 22, "skill": "coding", "specie": "human"})
-henok = Entity("henok", {"age": 23, "skill": "coding", "specie": "human"})
-dad = Entity("owen", {"age": 50, "skill": "dentist", "specie": "human"})
-chidera = Entity("chidera", {"age": 20, "skill": "artist and programmer", "specie": "human"})
-mum = Entity("miriam", {"age": 40, "skill": "business", "specie": "human"})
-nala = Entity("nala", {"age": 3, "specie": "cat"})
-boba = Entity("boba", {"age": 1, "specie": "dog"})
-christina = Entity("christina", {"age": 22, "skill": "artist and teacher", "specie": "human"})
-
-friendship1 = Connection(me, henok, "friend", isTwoWay=True)
-friendship2 = Connection(me, chidera, "friend", isTwoWay=True)
-friend3 = Connection(me, christina, "friend", isTwoWay=True)
-friend4 = Connection(me, nala, "friend", isTwoWay=True)
-friend5 = Connection(henok, chidera, "friend", isTwoWay=True)
-dating = Connection(christina, henok, "dating", isTwoWay=True)
-
-pet = Connection(christina, nala, "pet", isTwoWay=False)
-pet2 = Connection(christina, boba, "pet", isTwoWay=False)
-
-sonD = Connection(me, dad, "son", isTwoWay=False)
-sonM = Connection(me, mum, "son", isTwoWay=False)
-father = Connection(dad, me, "parent", isTwoWay=False)
-mother = Connection(mum, me, "parent", isTwoWay=False)
-marriage = Connection(mum, dad, "marriage", isTwoWay=True)
-
-people = [me.toNode(), henok.toNode(), dad.toNode(), mum.toNode(), chidera.toNode()]
-people += [nala.toNode(), boba.toNode(), christina.toNode()]
-
-conns = friendship1.toEdges() + father.toEdges() + sonD.toEdges() + mother.toEdges()
-conns += sonM.toEdges() + marriage.toEdges() + friendship2.toEdges()
-conns += friend3.toEdges() + friend4.toEdges() + pet.toEdges()
-conns += pet2.toEdges() + dating.toEdges() + friend5.toEdges()
-
-G = Graph(people, conns)
-
 def showProg(prog: list):
     final = " "
     for s in prog:
         final += s[0]
         final += '('
         if s[1]:
-            if isinstance(s[1][0], str):
+            args = s[1][0]
+            if isinstance(args, str):
                 final += ', '.join(s[1])
-            elif isinstance(s[1][0], list):
-                final += ', '.join(s[1][0])
+            elif isinstance(args, list):
+                final += ', '.join(args)
+            elif isinstance(args, dict):
+                final += json.dumps(args)
+            elif callable(args) or isfunction(args):
+                final += f"<:function:>"
+            elif isinstance(args, int):
+                final += str(args)
         final += ').'
     print("-?>", " "+final[0:len(final)-1])
 
-# find all names in db
-# q = G.v().property("id")
-# showProg(q.program)
-# print("\t", q.run(), "\n", sep="")
+def addTransformer(fn, priority: int):
+    if not isfunction(fn) or not callable(fn):
+        return error("Invalid transformer function")
+    ind = 0
+    for i in range(len(Graf["Transformers"])):
+        if priority > Graf["Transformers"][i]["priority"]:
+            ind = i
+            break
+        Graf["Transformers"].insert(i, {"priority": priority, "fn": fn})
 
-# find my parents
-# q = G.v("joshua")._from("son").property("id")
-# showProg(q.program)
-# print("\t", q.run(), "\n", sep="")
-
-# find my friends
-# q = G.v("joshua").to("friend").property("id")
-# showProg(q.program)
-# print("\t", q.run(), "\n", sep="")
-
-# find my friends by knowing my mother's id
-# q = G.v("miriam").to("marriage").to("son").to("friend").property("id")
-# showProg(q.program)
-# print("\t", q.run(), "\n", sep="")
-
-# find christina's relationships and pets
-# q = G.v("christina")._from().property("id")
-# showProg(q.program)
-# print("\t", q.run(), "\n", sep="")
-
-# q = G.v("joshua")._as("j")._from().to().excl("j")._as("f").merge("j", "f").unique().property("id", "age", "skill")
-# showProg(q.program)
-# print("\t", q.run(), "\n", sep="")
-
+def transform(program):
+    acc = program[:]
+    for transformer in Graf["Transformers"]:
+        acc = transformer["fn"](acc)
+    return acc
+        
+Graf["Transformers"] = []
+Graf["addTransformer"] = addTransformer
